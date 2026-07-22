@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react';
 import { Download, Edit3, Info, Save } from 'lucide-react';
-import { AddButton, DataTable, EmptyState, MiniBars, PrimaryButton, Section, StatCard } from '../components/ui';
+import { DataTable, EmptyState, Section, StatCard } from '../components/ui';
 import { buildMonth, dateKey, formatDate, heatCalculations, type HeatForm } from '../utils/heatCycle';
 import { useActionMenu } from '../components/ActionMenu';
+import { useSession } from '../session';
+import { loadJson, storeJson } from '../storage';
 
 const initialForm: HeatForm = {
   startDate: '',
@@ -12,7 +14,24 @@ const initialForm: HeatForm = {
   symptoms: ''
 };
 
-const history: string[][] = [];
+const HEAT_FORM_KEY = 'heat-cycle';
+const HEAT_HISTORY_KEY = 'heat-history';
+
+function isHeatForm(value: unknown): value is HeatForm {
+  if (!value || typeof value !== 'object') return false;
+  const form = value as Partial<HeatForm>;
+  return (
+    typeof form.startDate === 'string' &&
+    typeof form.heatLength === 'number' &&
+    typeof form.cycleLength === 'number' &&
+    typeof form.notes === 'string' &&
+    typeof form.symptoms === 'string'
+  );
+}
+
+function isRows(value: unknown): value is string[][] {
+  return Array.isArray(value) && value.every(row => Array.isArray(row) && row.every(cell => typeof cell === 'string'));
+}
 
 function HeatCalendar({ form }: { form: HeatForm }) {
   const calc = form.startDate ? heatCalculations(form) : null;
@@ -48,7 +67,11 @@ function HeatCalendar({ form }: { form: HeatForm }) {
 }
 
 export function HeatPage() {
-  const [form, setForm] = useState(initialForm);
+  const { userKey } = useSession();
+  const formStorageKey = userKey(HEAT_FORM_KEY);
+  const historyStorageKey = userKey(HEAT_HISTORY_KEY);
+  const [form, setForm] = useState<HeatForm>(() => loadJson(formStorageKey, initialForm, isHeatForm));
+  const [history, setHistory] = useState<string[][]>(() => loadJson(historyStorageKey, [], isRows));
   const [toast, setToast] = useState(false);
   const { openAction } = useActionMenu();
   const calc = useMemo(() => form.startDate ? heatCalculations(form) : null, [form]);
@@ -58,8 +81,20 @@ export function HeatPage() {
   }
 
   function save() {
+    storeJson(formStorageKey, form);
+    if (form.startDate) {
+      const row = [formatDate(new Date(`${form.startDate}T12:00:00`)), `${form.heatLength} dní`, `${form.cycleLength} dní`, form.notes || form.symptoms || 'bez poznámky'];
+      const nextHistory = [row, ...history.filter(existing => existing.join('|') !== row.join('|'))];
+      setHistory(nextHistory);
+      storeJson(historyStorageKey, nextHistory);
+    }
     setToast(true);
     window.setTimeout(() => setToast(false), 2200);
+  }
+
+  function newCycle() {
+    setForm(initialForm);
+    storeJson(formStorageKey, initialForm);
   }
 
   return (
@@ -87,7 +122,7 @@ export function HeatPage() {
       </div>
 
       <div className="content-grid two">
-        <Section title="Zadání cyklu" action={<AddButton>Nový cyklus</AddButton>}>
+        <Section title="Zadání cyklu" action={<button className="secondary-button" onClick={newCycle}>Nový cyklus</button>}>
           <div className="form-grid">
             <label>Datum začátku<input type="date" value={form.startDate} onChange={event => update('startDate', event.target.value)} /></label>
             <label>Délka hárání<input type="number" value={form.heatLength} onChange={event => update('heatLength', Number(event.target.value))} /></label>
@@ -95,7 +130,7 @@ export function HeatPage() {
             <label>Příznaky<input value={form.symptoms} onChange={event => update('symptoms', event.target.value)} /></label>
           </div>
           <textarea value={form.notes} onChange={event => update('notes', event.target.value)} />
-          <PrimaryButton>Uložit a přepočítat</PrimaryButton>
+          <button className="primary-button" onClick={save}><Save size={17} /> Uložit a přepočítat</button>
         </Section>
         <Section title="Připomínky">
           <div className="timeline">

@@ -11,6 +11,7 @@ export type NavItem = {
 export type DogProfile = {
   name: string;
   breed: string;
+  photoUrl: string;
   birthday: string;
   age: string;
   weight: string;

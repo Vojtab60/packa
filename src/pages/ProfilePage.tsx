@@ -1,17 +1,19 @@
-import { Camera, Edit3, Plus, Phone, Save, Trash2, X } from 'lucide-react';
-import { useState } from 'react';
-import headerImage from '../../assets/spolu-down.jpg';
+import { Camera, Edit3, ImagePlus, MapPin, Plus, Phone, Save, Trash2, X } from 'lucide-react';
+import { useRef, useState } from 'react';
 import { DataTable, Section, StatCard } from '../components/ui';
-import { useActionMenu } from '../components/ActionMenu';
 import { emptyDogProfile, useSession } from '../session';
+import { loadJson, storeJson } from '../storage';
 
 type EditableProfile = typeof emptyDogProfile;
 type EditableProfileTextKey = Exclude<keyof EditableProfile, 'contacts'>;
 type WeightForm = { date: string; weight: string; note: string };
 type VetVisitForm = { date: string; reason: string; result: string };
+type GalleryPhoto = { id: string; photoUrl: string; place: string; addedAt: string };
+type PreviewPhoto = { photoUrl: string; title: string; detail?: string };
 const PROFILE_STORAGE_KEY = 'dog-profile';
 const WEIGHT_STORAGE_KEY = 'weight-history';
 const VET_STORAGE_KEY = 'vet-visits';
+const GALLERY_STORAGE_KEY = 'dog-gallery';
 const initialWeightRows: string[][] = [];
 const initialVetRows: string[][] = [];
 
@@ -24,6 +26,7 @@ function isEditableProfile(value: unknown): value is EditableProfile {
   return (
     typeof candidate.name === 'string' &&
     typeof candidate.breed === 'string' &&
+    (candidate.photoUrl === undefined || typeof candidate.photoUrl === 'string') &&
     typeof candidate.birthday === 'string' &&
     typeof candidate.age === 'string' &&
     typeof candidate.weight === 'string' &&
@@ -50,6 +53,7 @@ function loadStoredProfile(storageKey: string) {
 
     const birthdayInputValue = toDateInputValue(parsedProfile.birthday);
     return {
+      ...emptyDogProfile,
       ...parsedProfile,
       age: birthdayInputValue ? calculateAgeFromDate(birthdayInputValue) : parsedProfile.age
     };
@@ -64,6 +68,18 @@ function storeProfile(storageKey: string, profile: EditableProfile) {
 
 function isTableRows(value: unknown): value is string[][] {
   return Array.isArray(value) && value.every(row => Array.isArray(row) && row.every(cell => typeof cell === 'string'));
+}
+
+function isGalleryPhotos(value: unknown): value is GalleryPhoto[] {
+  return Array.isArray(value) && value.every(photo => {
+    const candidate = photo as Partial<GalleryPhoto>;
+    return (
+      typeof candidate.id === 'string' &&
+      typeof candidate.photoUrl === 'string' &&
+      typeof candidate.place === 'string' &&
+      typeof candidate.addedAt === 'string'
+    );
+  });
 }
 
 function loadStoredRows(key: string, fallback: string[][]) {
@@ -157,23 +173,72 @@ function calculateAgeFromDate(value: string) {
   return `${pluralizeYears(years)} a ${pluralizeMonths(months)}`;
 }
 
+function resizeDogPhoto(file: File, maxSize = 900, quality = 0.84) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      const image = new Image();
+
+      image.onload = () => {
+        const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(image.width * scale));
+        canvas.height = Math.max(1, Math.round(image.height * scale));
+
+        const context = canvas.getContext('2d');
+        if (!context) {
+          reject(new Error('Fotku se nepodařilo zpracovat.'));
+          return;
+        }
+
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+
+      image.onerror = () => reject(new Error('Soubor nevypadá jako obrázek.'));
+      image.src = String(reader.result);
+    };
+
+    reader.onerror = () => reject(new Error('Fotku se nepodařilo načíst.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 export function ProfilePage() {
   const { userKey } = useSession();
   const profileStorageKey = userKey(PROFILE_STORAGE_KEY);
   const weightStorageKey = userKey(WEIGHT_STORAGE_KEY);
   const vetStorageKey = userKey(VET_STORAGE_KEY);
+  const galleryStorageKey = userKey(GALLERY_STORAGE_KEY);
   const [profile, setProfile] = useState<EditableProfile>(() => loadStoredProfile(profileStorageKey));
   const [draft, setDraft] = useState<EditableProfile>(() => loadStoredProfile(profileStorageKey));
   const [weightRows, setWeightRows] = useState<string[][]>(() => loadStoredRows(weightStorageKey, initialWeightRows));
   const [vetRows, setVetRows] = useState<string[][]>(() => loadStoredRows(vetStorageKey, initialVetRows));
+  const [galleryPhotos, setGalleryPhotos] = useState<GalleryPhoto[]>(() => loadJson(galleryStorageKey, [], isGalleryPhotos));
+  const [editingGalleryPlaceId, setEditingGalleryPlaceId] = useState<string | null>(null);
+  const [galleryPlaceDraft, setGalleryPlaceDraft] = useState('');
   const [weightForm, setWeightForm] = useState<WeightForm>({ date: todayInput(), weight: '', note: '' });
   const [vetForm, setVetForm] = useState<VetVisitForm>({ date: todayInput(), reason: '', result: '' });
   const [entryModal, setEntryModal] = useState<'weight' | 'vet' | null>(null);
   const [editingWeightIndex, setEditingWeightIndex] = useState<number | null>(null);
   const [editingVetIndex, setEditingVetIndex] = useState<number | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [previewPhoto, setPreviewPhoto] = useState<PreviewPhoto | null>(null);
   const [toast, setToast] = useState('');
-  const { openAction } = useActionMenu();
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
+  const galleryInputRef = useRef<HTMLInputElement | null>(null);
+
+  function persistGalleryPhotos(nextPhotos: GalleryPhoto[]) {
+    if (!storeJson(galleryStorageKey, nextPhotos)) {
+      setToast('Galerii se nepodařilo uložit. Zkus smazat pár starších fotek nebo nahrát menší fotku.');
+      window.setTimeout(() => setToast(''), 3200);
+      return false;
+    }
+
+    setGalleryPhotos(nextPhotos);
+    return true;
+  }
 
   function startEditing() {
     setDraft(profile);
@@ -195,6 +260,103 @@ export function ProfilePage() {
 
   function updateProfile(key: EditableProfileTextKey, value: string) {
     setDraft(current => ({ ...current, [key]: value }));
+  }
+
+  async function updateDogPhoto(file: File | undefined) {
+    if (!file) {
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      setToast('Vyber prosím obrázek.');
+      window.setTimeout(() => setToast(''), 2200);
+      return;
+    }
+
+    try {
+      const photoUrl = await resizeDogPhoto(file);
+      const nextProfile = { ...profile, photoUrl };
+      setProfile(nextProfile);
+      setDraft(current => ({ ...current, photoUrl }));
+      storeProfile(profileStorageKey, nextProfile);
+      setToast('Fotka pejska byla uložená.');
+    } catch {
+      setToast('Fotku se nepodařilo uložit.');
+    } finally {
+      if (photoInputRef.current) {
+        photoInputRef.current.value = '';
+      }
+      window.setTimeout(() => setToast(''), 2200);
+    }
+  }
+
+  async function addGalleryPhoto(file: File | undefined) {
+    if (!file) {
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      setToast('Vyber prosím obrázek.');
+      window.setTimeout(() => setToast(''), 2200);
+      return;
+    }
+
+    try {
+      const photoUrl = await resizeDogPhoto(file, 720, 0.76);
+      const nextPhotos = [
+        { id: `${Date.now()}-${file.name}`, photoUrl, place: '', addedAt: formatCzechDate(todayInput()) },
+        ...galleryPhotos
+      ];
+      if (persistGalleryPhotos(nextPhotos)) {
+        setToast('Fotka byla přidaná do galerie.');
+      }
+    } catch {
+      setToast('Fotku se nepodařilo uložit.');
+    } finally {
+      if (galleryInputRef.current) {
+        galleryInputRef.current.value = '';
+      }
+      window.setTimeout(() => setToast(''), 2200);
+    }
+  }
+
+  function deleteGalleryPhoto(id: string) {
+    const nextPhotos = galleryPhotos.filter(photo => photo.id !== id);
+    if (persistGalleryPhotos(nextPhotos)) {
+      setToast('Fotka byla smazaná z galerie.');
+      window.setTimeout(() => setToast(''), 2200);
+    }
+  }
+
+  function startEditingGalleryPlace(photo: GalleryPhoto) {
+    setEditingGalleryPlaceId(photo.id);
+    setGalleryPlaceDraft(photo.place);
+  }
+
+  function saveGalleryPlace(id: string) {
+    const currentPhoto = galleryPhotos.find(photo => photo.id === id);
+    if (!currentPhoto) {
+      return;
+    }
+
+    const nextPlace = galleryPlaceDraft.trim();
+    if (!nextPlace) {
+      setEditingGalleryPlaceId(null);
+      setGalleryPlaceDraft('');
+      setToast(currentPhoto.place ? 'Místo zůstalo beze změny.' : 'Místo nebylo vyplněné.');
+      window.setTimeout(() => setToast(''), 2200);
+      return;
+    }
+
+    const nextPhotos = galleryPhotos.map(photo => photo.id === id ? { ...photo, place: nextPlace } : photo);
+    if (!persistGalleryPhotos(nextPhotos)) {
+      return;
+    }
+
+    setEditingGalleryPlaceId(null);
+    setGalleryPlaceDraft('');
+    setToast('Místo bylo uložené k fotce.');
+    window.setTimeout(() => setToast(''), 2200);
   }
 
   function updateBirthday(value: string) {
@@ -323,6 +485,19 @@ export function ProfilePage() {
     <div className="page-stack">
       {toast && <div className="toast"><Save size={17} /> {toast}</div>}
 
+      {previewPhoto && (
+        <div className="modal-backdrop photo-preview-backdrop" onClick={() => setPreviewPhoto(null)}>
+          <section className="photo-preview" aria-label="Náhled fotografie psa" onClick={event => event.stopPropagation()}>
+            <button className="icon-button photo-preview-close" onClick={() => setPreviewPhoto(null)} aria-label="Zavřít náhled fotky"><X size={18} /></button>
+            <img src={previewPhoto.photoUrl} alt={previewPhoto.title} />
+            <div className="photo-preview-caption">
+              <strong>{previewPhoto.title}</strong>
+              {previewPhoto.detail && <span>{previewPhoto.detail}</span>}
+            </div>
+          </section>
+        </div>
+      )}
+
       {!hasProfile && !isEditing && (
         <Section title="Začni vyplněním profilu" subtitle="Aplikace je pro nového uživatele prázdná. Nejdřív přidej základní údaje o svém pejskovi, potom můžeš zapisovat váhu, veterináře a denní aktivity.">
           <button className="primary-button" onClick={startEditing}><Plus size={17} /> Vyplnit profil pejska</button>
@@ -369,12 +544,30 @@ export function ProfilePage() {
       )}
 
       <section className="profile-hero">
-        <img src={headerImage} alt="Psi na červeném pozadí" />
-        <div className="profile-card">
-          <button className="dog-photo edit-photo" aria-label="Změnit fotografii psa" onClick={() => openAction({ title: 'Změnit fotografii psa', description: 'Vyber nebo pojmenuj novou fotku profilu. Později se sem napojí upload souboru.', kind: 'photo', confirmLabel: 'Uložit fotku' })}>
-            {visibleProfile.name.charAt(0)}
-            {isEditing && <Camera size={18} />}
+        <input
+          ref={photoInputRef}
+          className="visually-hidden-file"
+          type="file"
+          accept="image/*"
+          onChange={event => void updateDogPhoto(event.target.files?.[0])}
+        />
+        <div className={`dog-portrait ${visibleProfile.photoUrl ? 'has-photo' : ''}`}>
+          <button
+            className="dog-portrait-image"
+            aria-label={visibleProfile.photoUrl ? 'Zobrazit fotografii psa' : 'Přidat fotografii psa'}
+            onClick={() => visibleProfile.photoUrl ? setPreviewPhoto({ photoUrl: visibleProfile.photoUrl, title: visibleProfile.name || 'Fotka psa' }) : photoInputRef.current?.click()}
+          >
+            {visibleProfile.photoUrl ? (
+              <img src={visibleProfile.photoUrl} alt={`Fotka psa ${visibleProfile.name || ''}`} />
+            ) : (
+              <span><Camera size={30} /> Přidat fotku psa</span>
+            )}
           </button>
+          <button className="portrait-change-button" onClick={() => photoInputRef.current?.click()}>
+            <Camera size={18} /> {visibleProfile.photoUrl ? 'Změnit fotku' : 'Vybrat fotku'}
+          </button>
+        </div>
+        <div className="profile-card">
           <div>
             <h2>{visibleProfile.name || 'Profil pejska zatím není vyplněný'}</h2>
             <p>{visibleProfile.breed || 'Doplň plemeno'} · {visibleProfile.age || 'věk se spočítá z narození'}</p>
@@ -489,6 +682,48 @@ export function ProfilePage() {
           </div>
         </Section>
       </div>
+
+      <Section title="Galerie pejska" subtitle="Přidej fotky ze společných míst a výletů. U každé se uloží, kde vznikla.">
+        <div className="gallery-add">
+          <input
+            ref={galleryInputRef}
+            className="visually-hidden-file"
+            type="file"
+            accept="image/*"
+            onChange={event => void addGalleryPhoto(event.target.files?.[0])}
+          />
+          <button className="primary-button" onClick={() => galleryInputRef.current?.click()}><ImagePlus size={17} /> Přidat fotku</button>
+        </div>
+
+        {galleryPhotos.length ? (
+          <div className="dog-gallery">
+            {galleryPhotos.map(photo => (
+              <article className="gallery-photo-card" key={photo.id}>
+                <button onClick={() => setPreviewPhoto({ photoUrl: photo.photoUrl, title: photo.place || 'Fotka pejska', detail: photo.addedAt })} aria-label={`Zobrazit fotku: ${photo.place || 'bez místa'}`}>
+                  <img src={photo.photoUrl} alt={`Fotka psa: ${photo.place || 'bez místa'}`} />
+                </button>
+                <div>
+                  <strong><MapPin size={15} /> {photo.place || 'místo není zadané'}</strong>
+                  <span>{photo.addedAt}</span>
+                </div>
+                {editingGalleryPlaceId === photo.id && (
+                  <div className="gallery-place-editor">
+                    <input value={galleryPlaceDraft} onChange={event => setGalleryPlaceDraft(event.target.value)} placeholder="např. Attersee, Stromovka, doma" autoFocus />
+                    <button className="mini-action" onClick={() => saveGalleryPlace(photo.id)}><Save size={16} /> Uložit</button>
+                    <button className="mini-action" onClick={() => { setEditingGalleryPlaceId(null); setGalleryPlaceDraft(''); }}><X size={16} /> Zrušit</button>
+                  </div>
+                )}
+                <div className="gallery-card-actions">
+                  <button className="mini-action" onClick={() => startEditingGalleryPlace(photo)}><MapPin size={16} /> {photo.place ? 'Upravit místo' : 'Přidat místo'}</button>
+                  <button className="mini-action danger" onClick={() => deleteGalleryPhoto(photo.id)}><Trash2 size={16} /> Smazat</button>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state"><strong>Galerie je zatím prázdná</strong><p>Nejdřív přidej fotku. Místo můžeš doplnit hned potom přímo pod ní.</p></div>
+        )}
+      </Section>
     </div>
   );
 }

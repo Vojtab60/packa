@@ -1,5 +1,6 @@
 import { createContext, type ReactNode, useContext, useMemo, useState } from 'react';
 import type { DogProfile } from './types';
+import { copyStoredValueIfMissing } from './storage';
 
 export type PackaUser = {
   name: string;
@@ -14,10 +15,26 @@ type SessionContextValue = {
 };
 
 const CURRENT_USER_KEY = 'packa-current-user';
+const USER_DATA_KEYS = [
+  'dog-profile',
+  'dog-gallery',
+  'weight-history',
+  'vet-visits',
+  'activity-history',
+  'heat-cycle',
+  'heat-history',
+  'health-vaccinations',
+  'health-medicines',
+  'health-allergies',
+  'health-allergy-notes',
+  'settings-profile',
+  'settings-notifications'
+];
 
 export const emptyDogProfile: DogProfile = {
   name: '',
   breed: '',
+  photoUrl: '',
   birthday: '',
   age: '',
   weight: '',
@@ -46,6 +63,12 @@ function loadStoredUser() {
   }
 }
 
+function migrateAnonymousData(email: string) {
+  for (const key of USER_DATA_KEYS) {
+    copyStoredValueIfMissing(`packa:anonymous:${key}`, `packa:${email}:${key}`);
+  }
+}
+
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<PackaUser | null>(() => loadStoredUser());
 
@@ -56,6 +79,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         name: nextUser.name.trim() || normalizeEmail(nextUser.email),
         email: normalizeEmail(nextUser.email)
       };
+      migrateAnonymousData(normalizedUser.email);
       window.localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(normalizedUser));
       setUser(normalizedUser);
     },

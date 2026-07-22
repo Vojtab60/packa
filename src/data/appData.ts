@@ -35,6 +35,7 @@ export const navItems: NavItem[] = [
 export const dogProfile: DogProfile = {
   name: '',
   breed: '',
+  photoUrl: '',
   birthday: '',
   age: '',
   weight: '',
