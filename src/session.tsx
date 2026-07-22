@@ -15,7 +15,7 @@ type SessionContextValue = {
 };
 
 const CURRENT_USER_KEY = 'packa-current-user';
-const USER_DATA_KEYS = [
+export const USER_DATA_KEYS = [
   'dog-profile',
   'dog-gallery',
   'weight-history',

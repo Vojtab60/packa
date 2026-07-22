@@ -701,6 +701,12 @@ textarea { min-height: 132px; padding: 13px; resize: vertical; }
   margin-left: auto;
 }
 
+.transfer-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .profile-edit-grid label,
 .full-field,
 .form-grid label {
